@@ -1,14 +1,14 @@
 # pdf_processor.py
-import PyPDF2
 import os
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 
-# pdf_processor.py
+# Import PyPDF2 with fallback for different versions
 try:
     from PyPDF2 import PdfReader
 except ImportError:
     from PyPDF2 import PdfFileReader as PdfReader
+
 
 def extract_text_from_pdf(pdf_path):
     """
@@ -21,7 +21,6 @@ def extract_text_from_pdf(pdf_path):
         str: Extracted text from all pages
     """
     try:
-        # Try new PyPDF2 3.x API
         reader = PdfReader(pdf_path)
         text = ""
         for page in reader.pages:
@@ -41,6 +40,7 @@ def create_dummy_pdf(file_path, content):
         c.drawString(100, y_position, line.strip())
         y_position -= 15
     c.save()
+
 
 if __name__ == "__main__":
     # --- For Testing ---
@@ -64,7 +64,7 @@ if __name__ == "__main__":
         if extracted_text:
             print("Successfully extracted text:")
             print("-" * 30)
-            print(extracted_text[:500]) # Print first 500 characters
+            print(extracted_text[:500])
             print("-" * 30)
         else:
             print("Failed to extract any text from the dummy PDF.")
