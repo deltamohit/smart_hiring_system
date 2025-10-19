@@ -4,30 +4,33 @@ import os
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 
+# pdf_processor.py
+try:
+    from PyPDF2 import PdfReader
+except ImportError:
+    from PyPDF2 import PdfFileReader as PdfReader
+
 def extract_text_from_pdf(pdf_path):
     """
-    Extracts text from a PDF file.
-
+    Extract text from a PDF file.
+    
     Args:
-        pdf_path (str): The path to the PDF file.
-
+        pdf_path (str): Path to the PDF file
+        
     Returns:
-        str: The extracted text from the PDF, or an empty string if an error occurs.
+        str: Extracted text from all pages
     """
-    text = ""
     try:
-        with open(pdf_path, 'rb') as file:
-            reader = PyPDF2.PdfReader(file)
-            for page_num in range(len(reader.pages)):
-                page = reader.pages[page_num]
-                text += page.extract_text() or "" # Handle cases where page.extract_text() might return None
-    except PyPDF2.errors.PdfReadError:
-        print(f"Error reading PDF file: {pdf_path}. It might be corrupted or encrypted.")
-    except FileNotFoundError:
-        print(f"Error: PDF file not found at {pdf_path}")
+        # Try new PyPDF2 3.x API
+        reader = PdfReader(pdf_path)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() + "\n"
+        return text
     except Exception as e:
-        print(f"An unexpected error occurred while processing {pdf_path}: {e}")
-    return text
+        print(f"Error extracting text from PDF: {e}")
+        return ""
+
 
 def create_dummy_pdf(file_path, content):
     """Creates a simple PDF file for testing purposes."""
