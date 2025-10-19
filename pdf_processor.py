@@ -1,6 +1,7 @@
 # pdf_processor.py
 from PyPDF2 import PdfReader
 # text_preprocessor.py
+# text_preprocessor.py
 import re
 import nltk
 from nltk.corpus import stopwords
@@ -21,6 +22,16 @@ try:
     nltk.data.find('tokenizers/punkt')
 except LookupError:
     nltk.download('punkt', quiet=True)
+
+try:
+    nltk.data.find('tokenizers/punkt_tab')
+except LookupError:
+    nltk.download('punkt_tab', quiet=True)
+
+try:
+    nltk.data.find('corpora/omw-1.4')
+except LookupError:
+    nltk.download('omw-1.4', quiet=True)
 
 # Now safe to use stopwords
 stop_words = set(stopwords.words('english'))
