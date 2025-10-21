@@ -1,209 +1,304 @@
 # pages/1_👨‍🎓_Student_Mode.py
 import streamlit as st
-import os
-import tempfile
 from pdf_processor import extract_text_from_pdf
 from text_preprocessor import preprocess_text
 from matcher import match_resume_to_job
-from company_database import COMPANY_JOB_SKILLS, SKILL_COURSE_MAP
-
-# Page Configuration
-st.set_page_config(
-    page_title="Student Mode - Smart Hiring",
-    page_icon="👨‍🎓",
-    layout="wide"
+from database import (
+    save_student_resume, 
+    get_current_resume, 
+    get_all_resume_versions,
+    save_analysis_result,
+    get_student_analysis_history,
+    get_company_specific_history
 )
+from datetime import datetime
+import pandas as pd
 
-st.title("👨‍🎓 Student Mode: Resume Analysis")
-st.markdown("Upload your resume and check your match percentage with companies that visited SCT last year!")
+st.title("👨‍🎓 Student Mode - Resume Analysis")
 
-st.divider()
+# Check authentication
+if 'logged_in' not in st.session_state or not st.session_state['logged_in']:
+    st.warning("⚠️ Please login first!")
+    st.stop()
 
-# Get list of companies
-companies = sorted(COMPANY_JOB_SKILLS.keys())
+if st.session_state['user_type'] != 'student':
+    st.error("❌ This page is only for students!")
+    st.stop()
 
-# Sidebar - Company and Role Selection
-st.sidebar.header("🎯 Select Target Company & Role")
+student_email = st.session_state['user_email']
+student_name = st.session_state['user_name']
 
-selected_company = st.sidebar.selectbox(
-    "Choose Company:",
-    options=companies,
-    help="Select from companies that visited SCT in 2024-2025"
-)
+st.write(f"**Welcome, {student_name}!**")
+st.write("---")
 
-# Get job roles for selected company
-if selected_company:
-    job_roles = list(COMPANY_JOB_SKILLS[selected_company].keys())
+# ============ SECTION 1: CURRENT RESUME & UPLOAD ============
+
+st.subheader("📄 Your Resume")
+
+current_resume = get_current_resume(student_email)
+
+col1, col2 = st.columns([2, 1])
+
+with col1:
+    if current_resume:
+        st.success(f"✅ Current Resume: **{current_resume['resume_filename']}**")
+        st.info(f"📅 Uploaded: {current_resume['uploaded_at'][:10]} | Version: {current_resume['version_number']}")
+    else:
+        st.info("📤 No resume uploaded yet. Please upload your resume below.")
+
+with col2:
+    if st.button("📂 View All Versions", use_container_width=True):
+        st.session_state['show_versions'] = not st.session_state.get('show_versions', False)
+
+# Show resume version history
+if st.session_state.get('show_versions', False):
+    st.write("#### 📚 Resume Version History")
+    all_versions = get_all_resume_versions(student_email)
     
-    selected_role = st.sidebar.selectbox(
-        "Choose Job Role:",
-        options=job_roles,
-        help="Select the specific role you're targeting"
-    )
+    if all_versions:
+        version_data = []
+        for v in all_versions:
+            version_data.append({
+                'Version': v['version_number'],
+                'Filename': v['resume_filename'],
+                'Uploaded': v['uploaded_at'][:10],
+                'Status': '✅ Current' if v['is_current'] else '📋 Previous'
+            })
+        st.dataframe(pd.DataFrame(version_data), use_container_width=True, hide_index=True)
+    else:
+        st.info("No resume versions found.")
+
+st.write("---")
+
+# Upload new resume section
+with st.expander("📤 Upload New Resume", expanded=not current_resume):
+    st.write("Upload a new version of your resume. This will be saved as version " + 
+             str(current_resume['version_number'] + 1 if current_resume else 1))
     
-    # Display selected job info
-    st.sidebar.markdown(f"### 📌 Selected Position")
-    st.sidebar.info(f"**Company:** {selected_company}\n\n**Role:** {selected_role}")
+    uploaded_file = st.file_uploader("Choose your resume (PDF)", type=['pdf'], key='resume_upload')
     
-    # Display required skills
-    st.sidebar.markdown("### 🔑 Key Required Skills")
-    required_skills = COMPANY_JOB_SKILLS[selected_company][selected_role]
-    for skill in required_skills[:8]:
-        st.sidebar.markdown(f"• {skill}")
-    if len(required_skills) > 8:
-        st.sidebar.markdown(f"*...and {len(required_skills) - 8} more*")
-
-st.divider()
-
-# Main Content - File Upload
-st.header("📤 Upload Your Resume")
-
-uploaded_file = st.file_uploader(
-    "Choose your resume (PDF format)",
-    type=['pdf'],
-    help="Upload your resume in PDF format for analysis"
-)
-
-if uploaded_file is not None:
-    st.success(f"✅ File uploaded: **{uploaded_file.name}** ({uploaded_file.size / 1024:.2f} KB)")
-    
-    # Process button
-    if st.button("🔍 Analyze My Resume", type="primary", use_container_width=True):
-        with st.spinner("🤖 Analyzing your resume against the job requirements... This may take a few seconds..."):
-            try:
-                # Save uploaded file temporarily
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-                    tmp_file.write(uploaded_file.read())
-                    tmp_file_path = tmp_file.name
-                
-                # Extract and preprocess text
-                raw_text = extract_text_from_pdf(tmp_file_path)
-                
-                if not raw_text or len(raw_text.strip()) == 0:
-                    st.error("❌ Could not extract text from the PDF. Please ensure it's a valid, non-encrypted PDF.")
-                else:
-                    processed_text = preprocess_text(raw_text)
-                    
-                    if not processed_text or len(processed_text.strip()) == 0:
-                        st.error("❌ Resume appears to be empty after processing. Please check your resume content.")
-                    else:
-                        # Create a temporary job database entry for matching
-                        from data_manager import JOB_SKILL_DATABASE
-                        
-                        # Add the selected company-role to the database temporarily
-                        temp_job_key = f"{selected_company} - {selected_role}"
-                        JOB_SKILL_DATABASE[temp_job_key] = required_skills
-                        
-                        # Perform matching
-                        result = match_resume_to_job(processed_text, temp_job_key)
-                        
-                        # Display Results
-                        st.success("✅ Analysis Complete!")
-                        
-                        # Scores Section
-                        st.header("📊 Your Match Scores")
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            st.metric(
-                                label="ATS Score",
-                                value=f"{result['ats_score']}%",
-                                help="Keyword match percentage"
-                            )
-                        
-                        with col2:
-                            st.metric(
-                                label="Semantic Score",
-                                value=f"{result['semantic_score']}%",
-                                help="AI-based contextual similarity"
-                            )
-                        
-                        with col3:
-                            st.metric(
-                                label="Overall Match",
-                                value=f"{result['combined_score']}%",
-                                help="Combined match score",
-                                delta=f"{result['combined_score'] - 50:.1f}% vs average"
-                            )
-                        
-                        # Interpretation with color coding
-                        if result['combined_score'] >= 70:
-                            st.success("🎉 **Excellent Match!** Your resume is very well-aligned with this role. You have a strong chance!")
-                        elif result['combined_score'] >= 50:
-                            st.info("👍 **Good Match!** Your resume shows potential. Consider adding a few more relevant skills to boost your score.")
-                        else:
-                            st.warning("⚠️ **Room for Improvement!** Focus on building key skills for this role. Check the recommendations below.")
-                        
-                        st.divider()
-                        
-                        # Skills Breakdown
-                        st.header("🎯 Detailed Skills Analysis")
-                        
-                        col_matched, col_missing = st.columns(2)
-                        
-                        with col_matched:
-                            st.subheader(f"✅ Skills You Have ({len(result['matched_skills'])})")
-                            if result['matched_skills']:
-                                for skill in result['matched_skills']:
-                                    st.markdown(f"✓ {skill}")
-                            else:
-                                st.markdown("*No matched skills found. Consider adding relevant keywords to your resume.*")
-                        
-                        with col_missing:
-                            st.subheader(f"❌ Skills to Develop ({len(result['missing_skills'])})")
-                            if result['missing_skills']:
-                                for skill in result['missing_skills'][:12]:
-                                    st.markdown(f"• {skill}")
-                                if len(result['missing_skills']) > 12:
-                                    st.markdown(f"*...and {len(result['missing_skills']) - 12} more*")
-                            else:
-                                st.markdown("*Great! You have all required skills!*")
-                        
-                        st.divider()
-                        
-                        # Personalized Feedback
-                        if result['missing_skills']:
-                            st.header("💡 Personalized Learning Path")
-                            st.markdown("Here are recommended courses to help you build the missing skills:")
-                            
-                            # Create tabs for different categories if needed
-                            recommendations = []
-                            for skill in result['missing_skills'][:8]:  # Top 8 missing skills
-                                if skill in SKILL_COURSE_MAP:
-                                    recommendations.append((skill, SKILL_COURSE_MAP[skill]))
-                                else:
-                                    recommendations.append((skill, f"Search for '{skill}' courses on Coursera, Udemy, or edX"))
-                            
-                            for idx, (skill, course) in enumerate(recommendations, 1):
-                                with st.expander(f"📚 {idx}. Learn {skill.capitalize()}"):
-                                    st.markdown(f"**Recommended:** {course}")
-                                    st.markdown(f"**Priority:** {'High' if idx <= 3 else 'Medium'}")
-                        
-                        st.divider()
-                        
-                        # Action Items
-                        st.header("✅ Next Steps")
-                        st.markdown(f"""
-                        1. **Focus on top 3-5 missing skills** to maximize your match score
-                        2. **Update your resume** with projects demonstrating these skills
-                        3. **Re-analyze** your updated resume to track improvement
-                        4. **Apply** when you reach 70%+ match score for best chances
-                        """)
-                
-                # Clean up temporary file
-                os.unlink(tmp_file_path)
+    if uploaded_file and st.button("💾 Save Resume", use_container_width=True):
+        with st.spinner("Extracting text from PDF..."):
+            resume_text = extract_text_from_pdf(uploaded_file)
             
-            except Exception as e:
-                st.error(f"❌ An error occurred during analysis: {str(e)}")
-                st.markdown("Please try again or contact the placement cell if the issue persists.")
+            if resume_text and len(resume_text.strip()) > 50:
+                result = save_student_resume(student_email, resume_text, uploaded_file.name)
+                
+                if result:
+                    st.success(f"✅ Resume uploaded successfully as Version {result[0]['version_number']}!")
+                    st.balloons()
+                    st.rerun()
+                else:
+                    st.error("❌ Error saving resume. Please try again.")
+            else:
+                st.error("❌ Could not extract text from PDF. Please ensure it's a valid resume.")
 
+st.write("---")
+
+# ============ SECTION 2: PREVIOUS INSIGHTS ============
+
+st.subheader("📊 Your Previous Insights")
+
+analysis_history = get_student_analysis_history(student_email)
+
+if analysis_history:
+    # Group by company
+    companies = {}
+    for analysis in analysis_history:
+        company = analysis['company_name']
+        if company not in companies:
+            companies[company] = []
+        companies[company].append(analysis)
+    
+    st.write(f"**Total Companies Analyzed: {len(companies)}**")
+    
+    # Show each company's insights
+    for company, analyses in companies.items():
+        with st.expander(f"🏢 {company} ({len(analyses)} analysis{'es' if len(analyses) > 1 else ''})"):
+            for idx, analysis in enumerate(analyses):
+                st.write(f"**Analysis #{idx + 1}** | 📅 {analysis['analyzed_at'][:16]} | 📄 Resume v{analysis['resume_version']}")
+                st.write(f"**Job Role:** {analysis['job_role']}")
+                
+                col1, col2, col3 = st.columns(3)
+                col1.metric("ATS Score", f"{analysis['ats_score']:.1f}%")
+                col2.metric("Semantic", f"{analysis['semantic_score']:.1f}%")
+                col3.metric("Combined", f"{analysis['combined_score']:.1f}%")
+                
+                col_a, col_b = st.columns(2)
+                
+                with col_a:
+                    st.write("**✅ Matched Skills:**")
+                    if analysis['matched_skills']:
+                        for skill in analysis['matched_skills'][:5]:
+                            st.write(f"• {skill}")
+                        if len(analysis['matched_skills']) > 5:
+                            st.write(f"*...and {len(analysis['matched_skills']) - 5} more*")
+                
+                with col_b:
+                    st.write("**❌ Missing Skills:**")
+                    if analysis['missing_skills']:
+                        for skill in analysis['missing_skills'][:5]:
+                            st.write(f"• {skill}")
+                        if len(analysis['missing_skills']) > 5:
+                            st.write(f"*...and {len(analysis['missing_skills']) - 5} more*")
+                
+                if idx < len(analyses) - 1:
+                    st.write("---")
 else:
-    st.info("👆 Please upload your resume PDF to begin analysis")
+    st.info("📭 No previous analyses yet. Analyze your resume below to get started!")
 
-# Footer
-st.divider()
-st.markdown("""
-<div style='text-align: center; color: gray; padding: 10px;'>
-    <p><small>💡 Tip: Make sure your resume includes relevant keywords, projects, and skills for better matching</small></p>
-</div>
-""", unsafe_allow_html=True)
+st.write("---")
+
+# ============ SECTION 3: NEW ANALYSIS ============
+
+st.subheader("🔍 Analyze Resume for Company")
+
+if not current_resume:
+    st.warning("⚠️ Please upload a resume first!")
+    st.stop()
+
+# Import from your company database
+from company_database import COMPANY_JOB_SKILLS
+
+# Company selection (dropdown with real companies)
+company_name = st.selectbox("Select Company", sorted(list(COMPANY_JOB_SKILLS.keys())))
+
+# Job role selection (based on selected company)
+if company_name:
+    available_roles = list(COMPANY_JOB_SKILLS[company_name].keys())
+    job_role = st.selectbox("Select Job Role", available_roles)
+    
+    # Check for previous analysis
+    previous_analysis = get_company_specific_history(student_email, company_name)
+    
+    if previous_analysis:
+        st.info(f"💡 You have {len(previous_analysis)} previous analysis{'es' if len(previous_analysis) > 1 else ''} for {company_name}")
+    
+    if st.button("🚀 Analyze Resume", use_container_width=True, type="primary"):
+        with st.spinner("Analyzing your resume..."):
+            # Preprocess resume text
+            processed_text = preprocess_text(current_resume['resume_text'])
+            
+            # Calculate scores using your matcher function
+            results = match_resume_to_job(processed_text, company_name, job_role)
+            
+            # Check for errors
+            if 'error' in results:
+                st.error(f"❌ {results['error']}")
+                st.stop()
+            
+            # Convert feedback dict to string for storage
+            feedback_str = str(results['feedback'])
+            
+            # Save to database
+            save_analysis_result(
+                student_email=student_email,
+                company_name=company_name,
+                job_role=job_role,
+                resume_version=current_resume['version_number'],
+                resume_filename=current_resume['resume_filename'],
+                ats_score=results['ats_score'],
+                semantic_score=results['semantic_score'],
+                combined_score=results['combined_score'],
+                matched_skills=results['matched_skills'],
+                missing_skills=results['missing_skills'],
+                feedback=feedback_str
+            )
+            
+            st.success("✅ Analysis complete and saved!")
+            
+            # Display results
+            st.write("### 📈 Current Analysis Results")
+            st.write(f"**Company:** {company_name} | **Role:** {job_role}")
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("ATS Score", f"{results['ats_score']:.1f}%")
+            col2.metric("Semantic Score", f"{results['semantic_score']:.1f}%")
+            col3.metric("Combined Score", f"{results['combined_score']:.1f}%")
+            
+            st.write("---")
+            
+            # Show comparison if previous analysis exists
+            if len(previous_analysis) > 0:
+                st.write("### 📊 Progress Comparison")
+                
+                latest_prev = previous_analysis[0]
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("**📋 Previous Analysis**")
+                    st.write(f"📅 Date: {latest_prev['analyzed_at'][:10]}")
+                    st.write(f"📄 Resume Version: {latest_prev['resume_version']}")
+                    st.metric("ATS", f"{latest_prev['ats_score']:.1f}%")
+                    st.metric("Semantic", f"{latest_prev['semantic_score']:.1f}%")
+                    st.metric("Combined", f"{latest_prev['combined_score']:.1f}%")
+                
+                with col2:
+                    st.write("**✨ Current Analysis**")
+                    st.write(f"📅 Date: {datetime.now().strftime('%Y-%m-%d')}")
+                    st.write(f"📄 Resume Version: {current_resume['version_number']}")
+                    
+                    ats_diff = results['ats_score'] - latest_prev['ats_score']
+                    sem_diff = results['semantic_score'] - latest_prev['semantic_score']
+                    comb_diff = results['combined_score'] - latest_prev['combined_score']
+                    
+                    st.metric("ATS", f"{results['ats_score']:.1f}%", f"{ats_diff:+.1f}%")
+                    st.metric("Semantic", f"{results['semantic_score']:.1f}%", f"{sem_diff:+.1f}%")
+                    st.metric("Combined", f"{results['combined_score']:.1f}%", f"{comb_diff:+.1f}%")
+                
+                st.write("---")
+                
+                # Improvement feedback
+                if comb_diff > 5:
+                    st.success(f"🎉 **Excellent progress!** Your score improved by {comb_diff:.1f}%!")
+                elif comb_diff > 0:
+                    st.success(f"👍 **Good improvement!** Your score increased by {comb_diff:.1f}%")
+                elif comb_diff < -5:
+                    st.warning(f"📉 Score decreased by {abs(comb_diff):.1f}%. Review the missing skills.")
+                elif comb_diff < 0:
+                    st.info(f"📊 Small decrease of {abs(comb_diff):.1f}%.")
+                else:
+                    st.info("📊 Your score remained stable.")
+                
+                # Skills comparison
+                st.write("#### 🔄 Skills Progress")
+                
+                new_skills = set(results['matched_skills']) - set(latest_prev['matched_skills'])
+                lost_skills = set(latest_prev['matched_skills']) - set(results['matched_skills'])
+                
+                if new_skills:
+                    st.success(f"**✨ New Skills Added ({len(new_skills)}):**")
+                    for skill in new_skills:
+                        st.write(f"• {skill}")
+                
+                if lost_skills:
+                    st.warning(f"**⚠️ Skills No Longer Detected ({len(lost_skills)}):**")
+                    for skill in lost_skills:
+                        st.write(f"• {skill}")
+                
+                if not new_skills and not lost_skills:
+                    st.info("No change in matched skills.")
+            
+            st.write("---")
+            
+            # Show matched and missing skills
+            col_a, col_b = st.columns(2)
+            
+            with col_a:
+                st.write("**✅ Matched Skills:**")
+                for skill in results['matched_skills']:
+                    st.write(f"• {skill}")
+                if not results['matched_skills']:
+                    st.write("*No skills matched*")
+            
+            with col_b:
+                st.write("**❌ Missing Skills to Add:**")
+                if results['missing_skills']:
+                    for skill in results['missing_skills']:
+                      st.write(f"• **{skill}**")
+                      if skill in results['feedback']:
+                        st.info(f"📚 {results['feedback'][skill]}")
+                else:
+                    st.write("*You have all required skills!*")
+           

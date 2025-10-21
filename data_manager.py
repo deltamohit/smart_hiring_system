@@ -28,11 +28,9 @@ JOB_SKILL_DATABASE = {
         "ui/ux", "design", "figma", "sketch", "adobe xd", "prototyp", "user research",
         "wirefram", "usabil", "interact design", "visual design", "feedback"
     ]
-    # Add more as needed, consider unique roles from your college's placement history
 }
 
 # This dictionary maps missing skills to suggested courses/resources.
-# Keep the skill names consistent with JOB_SKILL_DATABASE.
 SKILL_COURSE_MAP = {
     "python": "Check out 'Python for Everybody' on Coursera: https://www.coursera.org/specializations/python",
     "java": "Explore 'Java Programming and Software Engineering Fundamentals' on Coursera: https://www.coursera.org/specializations/java-programming",
@@ -78,5 +76,4 @@ SKILL_COURSE_MAP = {
     "sketch": "Learn Sketch: 'Sketch UI UX Design' on Udemy: https://www.udemy.com/course/sketch-ui-ux-design/",
     "adobe xd": "Master Adobe XD: 'Adobe XD UI UX Design' on Udemy: https://www.udemy.com/course/adobe-xd-ui-ux-design/",
     "user research": "Understand 'User Research Methods' on Coursera: https://www.coursera.org/learn/user-research-methods",
-    # Add more skill-to-course mappings as you expand your JOB_SKILL_DATABASE
 }

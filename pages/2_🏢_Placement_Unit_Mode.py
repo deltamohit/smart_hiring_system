@@ -1,300 +1,417 @@
 # pages/2_🏢_Placement_Unit_Mode.py
 import streamlit as st
-import pandas as pd
-import os
-import tempfile
-from datetime import datetime
-from pdf_processor import extract_text_from_pdf
-from text_preprocessor import preprocess_text
-from matcher import match_resume_to_job
+from database import (
+    create_announcement, get_all_announcements, delete_announcement, toggle_announcement_status,
+    publish_ranking, get_all_rankings, delete_ranking,
+    get_all_student_analyses, get_student_by_email,
+    save_student_resume, get_current_resume, save_analysis_result
+)
 from company_database import COMPANY_JOB_SKILLS
-from data_manager import JOB_SKILL_DATABASE
+from datetime import datetime
+import pandas as pd
+import json
 
-# Page Configuration
-st.set_page_config(
-    page_title="Placement Unit Mode - Smart Hiring",
-    page_icon="🏢",
-    layout="wide"
-)
+st.title("🏢 Placement Unit - Officer Dashboard")
 
-st.title("🏢 Placement Unit Mode: Student Rankings")
-st.markdown("View and rank all students who uploaded resumes for a specific company and role.")
+# Check authentication
+if 'logged_in' not in st.session_state or not st.session_state['logged_in']:
+    st.warning("⚠️ Please login first!")
+    st.stop()
 
-st.divider()
+if st.session_state['user_type'] != 'placement_cell':
+    st.error("❌ This page is only for placement cell officers!")
+    st.stop()
 
-# Initialize session state for storing student data
-if 'student_submissions' not in st.session_state:
-    st.session_state.student_submissions = []
+officer_email = st.session_state['user_email']
+officer_name = st.session_state['user_name']
 
-# Get list of companies
-companies = sorted(COMPANY_JOB_SKILLS.keys())
+st.write(f"**Welcome, {officer_name}!**")
+st.write("---")
 
-# Sidebar - Company and Role Selection
-st.sidebar.header("🎯 Select Company & Role")
+# Create tabs for different functions
+tab1, tab2, tab3 = st.tabs(["📢 Announcements", "🏆 Rank Students", "📋 Manage Published Results"])
 
-selected_company = st.sidebar.selectbox(
-    "Choose Company:",
-    options=companies,
-    key="placement_company"
-)
-
-# Get job roles for selected company
-if selected_company:
-    job_roles = list(COMPANY_JOB_SKILLS[selected_company].keys())
+# ============ TAB 1: ANNOUNCEMENTS ============
+with tab1:
+    st.subheader("📢 Send Announcement to Students")
     
-    selected_role = st.sidebar.selectbox(
-        "Choose Job Role:",
-        options=job_roles,
-        key="placement_role"
-    )
-    
-    # Display selected job info
-    st.sidebar.markdown(f"### 📌 Selected Position")
-    st.sidebar.info(f"**Company:** {selected_company}\n\n**Role:** {selected_role}")
-    
-    # Required skills
-    required_skills = COMPANY_JOB_SKILLS[selected_company][selected_role]
-    
-    st.sidebar.divider()
-    
-    # Clear data button
-    if st.sidebar.button("🗑️ Clear All Submissions", type="secondary"):
-        st.session_state.student_submissions = []
-        st.sidebar.success("All submissions cleared!")
-        st.rerun()
-
-st.divider()
-
-# Two columns layout
-col1, col2 = st.columns([1, 2])
-
-with col1:
-    st.header("📤 Upload Student Resume")
-    st.markdown("Upload resumes one by one to add them to the ranking system.")
-    
-    # Student name input
-    student_name = st.text_input("Student Name:", placeholder="Enter student name")
-    
-    # File uploader
-    uploaded_file = st.file_uploader(
-        "Upload Resume (PDF)",
-        type=['pdf'],
-        key="placement_upload"
-    )
-    
-    if uploaded_file and student_name:
-        if st.button("➕ Add to Ranking", type="primary", use_container_width=True):
-            with st.spinner(f"Processing {student_name}'s resume..."):
-                try:
-                    # Save uploaded file temporarily
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-                        tmp_file.write(uploaded_file.read())
-                        tmp_file_path = tmp_file.name
-                    
-                    # Extract and preprocess text
-                    raw_text = extract_text_from_pdf(tmp_file_path)
-                    
-                    if raw_text and len(raw_text.strip()) > 0:
-                        processed_text = preprocess_text(raw_text)
-                        
-                        if processed_text and len(processed_text.strip()) > 0:
-                            # Create temporary job key for matching
-                            temp_job_key = f"{selected_company} - {selected_role}"
-                            JOB_SKILL_DATABASE[temp_job_key] = required_skills
-                            
-                            # Perform matching
-                            result = match_resume_to_job(processed_text, temp_job_key)
-                            
-                            # Check if student already exists
-                            existing = [s for s in st.session_state.student_submissions 
-                                      if s['name'] == student_name and 
-                                      s['company'] == selected_company and 
-                                      s['role'] == selected_role]
-                            
-                            if existing:
-                                st.warning(f"⚠️ {student_name} has already submitted for this role. Updating scores...")
-                                # Remove old entry
-                                st.session_state.student_submissions = [
-                                    s for s in st.session_state.student_submissions 
-                                    if not (s['name'] == student_name and 
-                                           s['company'] == selected_company and 
-                                           s['role'] == selected_role)
-                                ]
-                            
-                            # Add student data
-                            student_data = {
-                                'name': student_name,
-                                'company': selected_company,
-                                'role': selected_role,
-                                'ats_score': result['ats_score'],
-                                'semantic_score': result['semantic_score'],
-                                'combined_score': result['combined_score'],
-                                'matched_skills': len(result['matched_skills']),
-                                'missing_skills': len(result['missing_skills']),
-                                'total_skills': result['total_skills'],
-                                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            }
-                            
-                            st.session_state.student_submissions.append(student_data)
-                            st.success(f"✅ {student_name}'s resume added successfully!")
-                            st.balloons()
-                            st.rerun()
-                        else:
-                            st.error("❌ Resume appears empty after processing.")
-                    else:
-                        st.error("❌ Could not extract text from PDF.")
-                    
-                    # Clean up
-                    os.unlink(tmp_file_path)
-                
-                except Exception as e:
-                    st.error(f"❌ Error processing resume: {str(e)}")
-    
-    elif uploaded_file and not student_name:
-        st.warning("⚠️ Please enter student name before uploading.")
-
-with col2:
-    st.header("📊 Student Rankings")
-    
-    # Filter submissions for current company and role
-    filtered_submissions = [
-        s for s in st.session_state.student_submissions
-        if s['company'] == selected_company and s['role'] == selected_role
-    ]
-    
-    if filtered_submissions:
-        # Sort by combined score (descending)
-        sorted_students = sorted(filtered_submissions, key=lambda x: x['combined_score'], reverse=True)
-        
-        # Display summary metrics
-        st.markdown(f"### 📈 Summary Statistics")
-        col_a, col_b, col_c, col_d = st.columns(4)
-        
-        with col_a:
-            st.metric("Total Applicants", len(sorted_students))
-        
-        with col_b:
-            avg_score = sum(s['combined_score'] for s in sorted_students) / len(sorted_students)
-            st.metric("Average Score", f"{avg_score:.1f}%")
-        
-        with col_c:
-            st.metric("Highest Score", f"{sorted_students[0]['combined_score']}%")
-        
-        with col_d:
-            st.metric("Lowest Score", f"{sorted_students[-1]['combined_score']}%")
-        
-        st.divider()
-        
-        # Create DataFrame for display
-        df = pd.DataFrame(sorted_students)
-        df['rank'] = range(1, len(df) + 1)
-        
-        # Reorder columns
-        display_df = df[['rank', 'name', 'combined_score', 'ats_score', 'semantic_score', 
-                         'matched_skills', 'missing_skills', 'total_skills', 'timestamp']]
-        
-        display_df.columns = ['Rank', 'Student Name', 'Overall Score (%)', 'ATS Score (%)', 
-                             'Semantic Score (%)', 'Skills Matched', 'Skills Missing', 
-                             'Total Skills', 'Submission Time']
-        
-        # Display table with color coding
-        st.markdown("### 🏆 Detailed Rankings")
-        
-        # Add color coding function
-        def highlight_scores(val):
-            if isinstance(val, (int, float)):
-                if val >= 70:
-                    return 'background-color: #d4edda'  # Green
-                elif val >= 50:
-                    return 'background-color: #fff3cd'  # Yellow
-                else:
-                    return 'background-color: #f8d7da'  # Red
-            return ''
-        
-        # Apply styling
-        styled_df = display_df.style.applymap(
-            highlight_scores, 
-            subset=['Overall Score (%)', 'ATS Score (%)', 'Semantic Score (%)']
-        )
-        
-        st.dataframe(styled_df, use_container_width=True, height=400)
-        
-        st.divider()
-        
-        # Download options
-        st.markdown("### 💾 Export Data")
-        
-        col_export1, col_export2 = st.columns(2)
-        
-        with col_export1:
-            # CSV download
-            csv = display_df.to_csv(index=False)
-            st.download_button(
-                label="📥 Download Rankings as CSV",
-                data=csv,
-                file_name=f"{selected_company}_{selected_role}_rankings_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv",
-                use_container_width=True
+    with st.expander("✍️ Create New Announcement", expanded=True):
+        with st.form("announcement_form", clear_on_submit=True):
+            announcement_title = st.text_input(
+                "Announcement Title*",
+                placeholder="e.g., Infosys Drive on 25th Oct",
+                max_chars=200
             )
-        
-        with col_export2:
-            # Excel download
-            excel_buffer = pd.ExcelWriter('temp_rankings.xlsx', engine='openpyxl')
-            display_df.to_excel(excel_buffer, index=False, sheet_name='Rankings')
-            excel_buffer.close()
             
-            with open('temp_rankings.xlsx', 'rb') as f:
-                st.download_button(
-                    label="📥 Download Rankings as Excel",
-                    data=f,
-                    file_name=f"{selected_company}_{selected_role}_rankings_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
+            announcement_message = st.text_area(
+                "Announcement Message*",
+                placeholder="Enter detailed message for students...",
+                height=150,
+                max_chars=2000
+            )
             
-            # Clean up temp file
-            if os.path.exists('temp_rankings.xlsx'):
-                os.remove('temp_rankings.xlsx')
-        
-        st.divider()
-        
-        # Top performers section
-        st.markdown("### 🌟 Top 5 Performers")
-        
-        top_5 = sorted_students[:5]
-        for idx, student in enumerate(top_5, 1):
-            with st.expander(f"#{idx} - {student['name']} ({student['combined_score']}%)"):
-                col_detail1, col_detail2 = st.columns(2)
-                
-                with col_detail1:
-                    st.markdown(f"""
-                    **Overall Score:** {student['combined_score']}%  
-                    **ATS Score:** {student['ats_score']}%  
-                    **Semantic Score:** {student['semantic_score']}%
-                    """)
-                
-                with col_detail2:
-                    st.markdown(f"""
-                    **Skills Matched:** {student['matched_skills']}/{student['total_skills']}  
-                    **Skills Missing:** {student['missing_skills']}  
-                    **Submitted:** {student['timestamp']}
-                    """)
+            submit_button = st.form_submit_button("📤 Send Announcement", type="primary")
+            
+            if submit_button:
+                if not announcement_title or not announcement_message:
+                    st.error("❌ Please fill both title and message!")
+                else:
+                    result = create_announcement(
+                        title=announcement_title,
+                        message=announcement_message,
+                        posted_by_email=officer_email,
+                        posted_by_name=officer_name
+                    )
+                    
+                    if result:
+                        st.success("✅ Announcement sent to all students!")
+                        st.balloons()
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to send announcement.")
     
+    st.write("---")
+    st.subheader("📋 Manage Announcements")
+    
+    all_announcements = get_all_announcements()
+    
+    if all_announcements:
+        for announcement in all_announcements:
+            status_icon = "✅" if announcement['is_active'] else "🚫"
+            
+            with st.expander(f"{status_icon} {announcement['title']} - {announcement['created_at'][:10]}"):
+                st.write(f"**Posted by:** {announcement['posted_by_name']}")
+                st.write(f"**Date:** {announcement['created_at'][:16]}")
+                st.info(announcement['message'])
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if announcement['is_active']:
+                        if st.button("🚫 Deactivate", key=f"deact_ann_{announcement['id']}"):
+                            toggle_announcement_status(announcement['id'], False)
+                            st.rerun()
+                    else:
+                        if st.button("✅ Activate", key=f"act_ann_{announcement['id']}"):
+                            toggle_announcement_status(announcement['id'], True)
+                            st.rerun()
+                
+                with col2:
+                    if st.button("🗑️ Delete", key=f"del_ann_{announcement['id']}"):
+                        delete_announcement(announcement['id'])
+                        st.rerun()
     else:
-        st.info("👈 No submissions yet. Upload student resumes to start ranking.")
-        st.markdown("""
-        ### 📝 How to Use:
-        1. Enter student name in the left panel
-        2. Upload their resume (PDF)
-        3. Click "Add to Ranking"
-        4. Repeat for all students
-        5. View rankings and export data
-        """)
+        st.info("📭 No announcements yet.")
 
-# Footer
-st.divider()
-st.markdown("""
-<div style='text-align: center; color: gray; padding: 10px;'>
-    <p><small>🏢 Placement Unit Dashboard | Data is session-based and will reset on page reload</small></p>
-</div>
-""", unsafe_allow_html=True)
+# ============ TAB 2: RANK STUDENTS ============
+with tab2:
+    st.subheader("🏆 Rank Students for Company")
+    
+    # Create sub-tabs for existing analyses and manual upload
+    subtab1, subtab2 = st.tabs(["📊 Rank & Publish", "📤 Upload New Resumes"])
+    
+    # ===== SUBTAB 1: RANK EXISTING ANALYSES =====
+    with subtab1:
+        st.write("#### Rank all students (existing + manually uploaded)")
+        
+        # Select company and job role
+        company_name = st.selectbox("Select Company", sorted(list(COMPANY_JOB_SKILLS.keys())), key="rank_company")
+        
+        if company_name:
+            available_roles = list(COMPANY_JOB_SKILLS[company_name].keys())
+            job_role = st.selectbox("Select Job Role", available_roles, key="rank_role")
+            
+            if st.button("🔍 Load Student Rankings", type="primary"):
+                # Get all analyses for this company/role (LATEST per student only)
+                student_analyses = get_all_student_analyses(company_name, job_role)
+                
+                if student_analyses:
+                    st.success(f"✅ Found {len(student_analyses)} unique students for {company_name} - {job_role}")
+                    st.info(f"💡 Showing latest analysis per student (duplicates removed)")
+                    
+                    # Create ranking dataframe
+                    ranking_data = []
+                    for idx, analysis in enumerate(student_analyses, 1):
+                        # Get student details
+                        student = get_student_by_email(analysis['student_email'])
+                        student_name = student['name'] if student else "Unknown"
+                        
+                        ranking_data.append({
+                            'Rank': idx,
+                            'Student Name': student_name,
+                            'Email': analysis['student_email'],
+                            'Resume Ver.': analysis['resume_version'],
+                            'Combined Score': f"{analysis['combined_score']:.1f}%",
+                            'ATS': f"{analysis['ats_score']:.1f}%",
+                            'Semantic': f"{analysis['semantic_score']:.1f}%",
+                            'Date': analysis['analyzed_at'][:10]
+                        })
+                    
+                    df = pd.DataFrame(ranking_data)
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+                    
+                    st.write("---")
+                    st.subheader("📤 Publish This Ranking")
+                    
+                    with st.form("publish_ranking_form"):
+                        result_title = st.text_input(
+                            "Result Title*",
+                            value=f"{company_name} - {job_role} Rankings",
+                            max_chars=200
+                        )
+                        
+                        result_description = st.text_area(
+                            "Description (Optional)",
+                            placeholder="Add notes about this ranking...",
+                            height=100
+                        )
+                        
+                        publish_button = st.form_submit_button("📢 Publish Rankings to Students", type="primary")
+                        
+                        if publish_button:
+                            if not result_title:
+                                st.error("❌ Please enter a title!")
+                            else:
+                                # Convert to JSON-serializable format
+                                rankings_json = [
+                                    {
+                                        'rank': item['Rank'],
+                                        'student_name': item['Student Name'],
+                                        'student_email': item['Email'],
+                                        'combined_score': float(analysis['combined_score']),
+                                        'ats_score': float(analysis['ats_score']),
+                                        'semantic_score': float(analysis['semantic_score'])
+                                    }
+                                    for item, analysis in zip(ranking_data, student_analyses)
+                                ]
+                                
+                                result = publish_ranking(
+                                    title=result_title,
+                                    company_name=company_name,
+                                    job_role=job_role,
+                                    description=result_description,
+                                    rankings=rankings_json,
+                                    published_by_email=officer_email,
+                                    published_by_name=officer_name
+                                )
+                                
+                                if result:
+                                    st.success("✅ Rankings published! Students can now view them.")
+                                    st.balloons()
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Failed to publish rankings.")
+                else:
+                    st.warning(f"⚠️ No students have analyzed their resume for {company_name} - {job_role} yet.")
+                    st.info("💡 Use the 'Upload New Resumes' tab to manually add student resumes.")
+    
+    # ===== SUBTAB 2: MANUAL UPLOAD =====
+    with subtab2:
+        st.write("#### Manually upload and analyze student resumes")
+        st.info("📌 Upload resumes for students who haven't uploaded yet. They will be merged with existing analyses.")
+        
+        # Select company and role
+        company_name_manual = st.selectbox("Select Company", sorted(list(COMPANY_JOB_SKILLS.keys())), key="manual_company")
+        
+        if company_name_manual:
+            available_roles_manual = list(COMPANY_JOB_SKILLS[company_name_manual].keys())
+            job_role_manual = st.selectbox("Select Job Role", available_roles_manual, key="manual_role")
+            
+            # Show existing analyses count
+            existing_analyses = get_all_student_analyses(company_name_manual, job_role_manual)
+            st.info(f"ℹ️ Currently {len(existing_analyses)} student(s) have analyzed for this role")
+            
+            st.write("---")
+            
+            # Multiple resume upload
+            uploaded_files = st.file_uploader(
+                "Upload Student Resumes (PDF)",
+                type=['pdf'],
+                accept_multiple_files=True,
+                key="manual_upload"
+            )
+            
+            if uploaded_files:
+                st.write(f"📄 {len(uploaded_files)} resume(s) uploaded")
+                
+                # Show preview
+                with st.expander("👀 Preview Uploaded Files"):
+                    for file in uploaded_files:
+                        st.write(f"• {file.name}")
+                
+                if st.button("🚀 Analyze All Resumes", type="primary", key="analyze_manual"):
+                    # Lazy import - only load when needed
+                    from pdf_processor import extract_text_from_pdf
+                    from text_preprocessor import preprocess_text
+                    from matcher import match_resume_to_job
+                    
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    results_list = []
+                    
+                    for idx, uploaded_file in enumerate(uploaded_files):
+                        status_text.text(f"Analyzing {uploaded_file.name}...")
+                        
+                        # Extract and process
+                        resume_text = extract_text_from_pdf(uploaded_file)
+                        
+                        if resume_text and len(resume_text.strip()) > 50:
+                            processed_text = preprocess_text(resume_text)
+                            
+                            # Calculate scores
+                            results = match_resume_to_job(processed_text, company_name_manual, job_role_manual)
+                            
+                            if 'error' not in results:
+                                results['filename'] = uploaded_file.name
+                                results['resume_text'] = resume_text
+                                results_list.append(results)
+                        
+                        progress_bar.progress((idx + 1) / len(uploaded_files))
+                    
+                    status_text.text("✅ Analysis complete!")
+                    
+                    if results_list:
+                        st.success(f"✅ Successfully analyzed {len(results_list)} resume(s)!")
+                        
+                        # Show results
+                        st.write("### 📊 Analysis Results")
+                        
+                        # Sort by combined score
+                        results_list.sort(key=lambda x: x['combined_score'], reverse=True)
+                        
+                        preview_data = []
+                        for idx, result in enumerate(results_list, 1):
+                            preview_data.append({
+                                'Rank': idx,
+                                'File Name': result['filename'],
+                                'Combined Score': f"{result['combined_score']:.1f}%",
+                                'ATS Score': f"{result['ats_score']:.1f}%",
+                                'Semantic Score': f"{result['semantic_score']:.1f}%"
+                            })
+                        
+                        st.dataframe(pd.DataFrame(preview_data), use_container_width=True, hide_index=True)
+                        
+                        st.write("---")
+                        st.write("### 📤 Assign to Students & Save")
+                        st.warning("⚠️ Assign each resume to a registered student email to save the analysis.")
+                        
+                        # Create form to assign emails
+                        with st.form("assign_emails_form"):
+                            st.write("**Assign Student Emails:**")
+                            
+                            email_assignments = {}
+                            for idx, result in enumerate(results_list):
+                                email_assignments[idx] = st.text_input(
+                                    f"{result['filename']}",
+                                    placeholder="student@sctce.ac.in",
+                                    key=f"email_{idx}"
+                                )
+                            
+                            save_button = st.form_submit_button("💾 Save Analyses", type="primary")
+                            
+                            if save_button:
+                                # Validate emails
+                                valid = True
+                                for idx, email in email_assignments.items():
+                                    if not email or '@' not in email:
+                                        st.error(f"❌ Invalid email for {results_list[idx]['filename']}")
+                                        valid = False
+                                        break
+                                    
+                                    # Check if student exists
+                                    student = get_student_by_email(email)
+                                    if not student:
+                                        st.error(f"❌ Student with email {email} not found in database!")
+                                        st.info(f"💡 Student must be registered first. Email: {email}")
+                                        valid = False
+                                        break
+                                
+                                if valid:
+                                    # Save all analyses
+                                    for idx, result in enumerate(results_list):
+                                        student_email = email_assignments[idx]
+                                        
+                                        # Save resume first
+                                        save_student_resume(
+                                            student_email=student_email,
+                                            resume_text=result['resume_text'],
+                                            filename=result['filename']
+                                        )
+                                        
+                                        # Get the resume version that was just saved
+                                        current_resume = get_current_resume(student_email)
+                                        
+                                        # Save analysis
+                                        save_analysis_result(
+                                            student_email=student_email,
+                                            company_name=company_name_manual,
+                                            job_role=job_role_manual,
+                                            resume_version=current_resume['version_number'],
+                                            resume_filename=result['filename'],
+                                            ats_score=result['ats_score'],
+                                            semantic_score=result['semantic_score'],
+                                            combined_score=result['combined_score'],
+                                            matched_skills=result['matched_skills'],
+                                            missing_skills=result['missing_skills'],
+                                            feedback=str(result['feedback'])
+                                        )
+                                    
+                                    st.success(f"✅ All {len(results_list)} resume(s) saved successfully!")
+                                    st.info("💡 Go back to 'Rank & Publish' tab to see the updated rankings with newly added students.")
+                                    st.balloons()
+                    else:
+                        st.error("❌ No valid resumes could be analyzed.")
+            
+            st.write("---")
+            st.write("#### 🔄 After Uploading")
+            st.info("""
+            **Next Steps:**
+            1. Save the manually uploaded resumes (assign student emails above)
+            2. Go to **'Rank & Publish'** tab
+            3. Click 'Load Student Rankings' to see ALL students (existing + newly uploaded)
+            4. Publish the combined rankings
+            """)
+
+# ============ TAB 3: MANAGE PUBLISHED RESULTS ============
+with tab3:
+    st.subheader("📋 Manage Published Rankings")
+    
+    all_rankings = get_all_rankings()
+    
+    if all_rankings:
+        st.write(f"**Total Published Rankings: {len(all_rankings)}**")
+        
+        for ranking in all_rankings:
+            status_icon = "✅" if ranking['is_active'] else "🚫"
+            
+            with st.expander(f"{status_icon} {ranking['title']} - {ranking['created_at'][:10]}"):
+                st.write(f"**Company:** {ranking['company_name']}")
+                st.write(f"**Job Role:** {ranking['job_role']}")
+                st.write(f"**Published by:** {ranking['published_by_name']}")
+                st.write(f"**Date:** {ranking['created_at'][:16]}")
+                
+                if ranking['description']:
+                    st.info(f"**Description:** {ranking['description']}")
+                
+                # Show top 5 rankings
+                rankings_list = ranking['rankings']
+                if rankings_list:
+                    st.write(f"**Total Students Ranked:** {len(rankings_list)}")
+                    
+                    top_5 = rankings_list[:5]
+                    df_data = []
+                    for r in top_5:
+                        df_data.append({
+                            'Rank': r['rank'],
+                            'Student': r['student_name'],
+                            'Score': f"{r['combined_score']:.1f}%"
+                        })
+                    
+                    st.dataframe(pd.DataFrame(df_data), use_container_width=True, hide_index=True)
+                
+                if st.button("🗑️ Delete Ranking", key=f"del_rank_{ranking['id']}"):
+                    delete_ranking(ranking['id'])
+                    st.success("Ranking deleted!")
+                    st.rerun()
+    else:
+        st.info("📭 No published rankings yet.")

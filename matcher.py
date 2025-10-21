@@ -2,37 +2,35 @@
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-from data_manager import JOB_SKILL_DATABASE, SKILL_COURSE_MAP
+from company_database import COMPANY_JOB_SKILLS, SKILL_COURSE_MAP
 
 # Load the S-BERT model (this happens once when the module is imported)
 print("Loading S-BERT model... (this may take a moment)")
 model = SentenceTransformer('all-MiniLM-L6-v2')
 print("S-BERT model loaded successfully!")
 
-def calculate_ats_score(processed_resume_text, job_role):
+def match_resume_to_job(processed_resume_text, company_name, job_role):
     """
-    Calculates an ATS-like keyword match score.
-    Counts how many required skills for the job role are present in the resume.
+    Complete matching function using company-specific job role skills.
     
     Args:
         processed_resume_text (str): The preprocessed resume text.
-        job_role (str): The job role to match against (must be a key in JOB_SKILL_DATABASE).
+        company_name (str): The company name
+        job_role (str): The job role to match against.
     
     Returns:
-        dict: Contains 'score' (percentage), 'matched_skills', 'missing_skills', and 'total_skills'.
+        dict: Complete matching results with scores and feedback.
     """
-    if job_role not in JOB_SKILL_DATABASE:
-        return {
-            'score': 0,
-            'matched_skills': [],
-            'missing_skills': [],
-            'total_skills': 0,
-            'error': f"Job role '{job_role}' not found in database."
-        }
+    # Get skills for this specific company and job role
+    if company_name not in COMPANY_JOB_SKILLS:
+        return {'error': f"Company '{company_name}' not found in database."}
     
-    required_skills = JOB_SKILL_DATABASE[job_role]
-    total_skills = len(required_skills)
+    if job_role not in COMPANY_JOB_SKILLS[company_name]:
+        return {'error': f"Job role '{job_role}' not found for {company_name}."}
     
+    required_skills = COMPANY_JOB_SKILLS[company_name][job_role]
+    
+    # Calculate ATS score (keyword matching)
     matched_skills = []
     missing_skills = []
     
@@ -42,60 +40,16 @@ def calculate_ats_score(processed_resume_text, job_role):
         else:
             missing_skills.append(skill)
     
-    score_percentage = (len(matched_skills) / total_skills) * 100 if total_skills > 0 else 0
+    ats_score = (len(matched_skills) / len(required_skills)) * 100 if required_skills else 0
     
-    return {
-        'score': round(score_percentage, 2),
-        'matched_skills': matched_skills,
-        'missing_skills': missing_skills,
-        'total_skills': total_skills
-    }
-
-def calculate_semantic_similarity(processed_resume_text, job_role):
-    """
-    Calculates semantic similarity between resume and job role using S-BERT embeddings.
-    
-    Args:
-        processed_resume_text (str): The preprocessed resume text.
-        job_role (str): The job role to match against.
-    
-    Returns:
-        dict: Contains 'similarity_score' (0-100 scale).
-    """
-    if job_role not in JOB_SKILL_DATABASE:
-        return {
-            'similarity_score': 0,
-            'error': f"Job role '{job_role}' not found in database."
-        }
-    
-    # Create a descriptive sentence from the job role skills
-    required_skills = JOB_SKILL_DATABASE[job_role]
-    job_description_text = f"Required skills for a {job_role} include: {', '.join(required_skills)}."
-    
-    # Generate embeddings
+    # Calculate semantic similarity
+    job_description_text = f"Required skills for {job_role} at {company_name}: {', '.join(required_skills)}."
     resume_embedding = model.encode([processed_resume_text])
     job_embedding = model.encode([job_description_text])
-    
-    # Calculate cosine similarity
     similarity = cosine_similarity(resume_embedding, job_embedding)[0][0]
+    semantic_score = similarity * 100
     
-    # Convert to percentage (0-100 scale)
-    similarity_percentage = similarity * 100
-    
-    return {
-        'similarity_score': round(similarity_percentage, 2)
-    }
-
-def get_personalized_feedback(missing_skills):
-    """
-    Generates personalized course recommendations for missing skills.
-    
-    Args:
-        missing_skills (list): List of skills the resume is missing.
-    
-    Returns:
-        dict: Maps each missing skill to a course recommendation.
-    """
+    # Get feedback
     feedback = {}
     for skill in missing_skills:
         if skill in SKILL_COURSE_MAP:
@@ -103,38 +57,17 @@ def get_personalized_feedback(missing_skills):
         else:
             feedback[skill] = f"Consider learning about '{skill}' through online resources."
     
-    return feedback
-
-def match_resume_to_job(processed_resume_text, job_role):
-    """
-    Complete matching function that combines ATS score, semantic similarity, and feedback.
-    
-    Args:
-        processed_resume_text (str): The preprocessed resume text.
-        job_role (str): The job role to match against.
-    
-    Returns:
-        dict: Complete matching results with scores and feedback.
-    """
-    # Calculate ATS score
-    ats_result = calculate_ats_score(processed_resume_text, job_role)
-    
-    # Calculate semantic similarity
-    semantic_result = calculate_semantic_similarity(processed_resume_text, job_role)
-    
-    # Get personalized feedback for missing skills
-    feedback = get_personalized_feedback(ats_result['missing_skills'])
-    
-    # Calculate combined score (simple average of ATS and semantic scores)
-    combined_score = (ats_result['score'] + semantic_result['similarity_score']) / 2
+    # Combined score
+    combined_score = (ats_score + semantic_score) / 2
     
     return {
+        'company': company_name,
         'job_role': job_role,
-        'ats_score': ats_result['score'],
-        'semantic_score': semantic_result['similarity_score'],
-        'combined_score': round(combined_score, 2),
-        'matched_skills': ats_result['matched_skills'],
-        'missing_skills': ats_result['missing_skills'],
-        'total_skills': ats_result['total_skills'],
+        'ats_score': float(round (ats_score, 2)),
+        'semantic_score': float(round(semantic_score, 2)),
+        'combined_score': float(round(combined_score, 2)),
+        'matched_skills': matched_skills,
+        'missing_skills': missing_skills,
+        'total_skills': len(required_skills),
         'feedback': feedback
     }
